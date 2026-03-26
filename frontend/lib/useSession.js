@@ -10,13 +10,18 @@ function generateUUID() {
   });
 }
 
-// UUID is generated inside useEffect (client-only).
-// Server renders '', client hydrates with '', then effect fires — no mismatch.
+// Persists sessionId in sessionStorage so it survives page navigation
+// within the same browser tab. A new tab = new session (correct behaviour).
 export function useSession() {
   const [sessionId, setSessionId] = useState('');
 
   useEffect(() => {
-    setSessionId(generateUUID());
+    let id = sessionStorage.getItem('sg_session_id');
+    if (!id) {
+      id = generateUUID();
+      sessionStorage.setItem('sg_session_id', id);
+    }
+    setSessionId(id);
   }, []);
 
   return sessionId;

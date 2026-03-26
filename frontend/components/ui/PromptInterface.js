@@ -161,7 +161,7 @@ function Spinner() {
 export default function PromptInterface() {
   const sessionId = useSession();
   const [prompt, setPrompt]         = useState('');
-  const [model, setModel]           = useState('gpt-4o');
+  const [model, setModel] = useState('llama-3.1-8b-instant');
   const [tab, setTab]               = useState('redaction');
   const [previewData, setPreviewData] = useState(null);
   const [responseData, setResponseData] = useState(null);
@@ -211,14 +211,14 @@ export default function PromptInterface() {
 
         <div style={css.promptFooter}>
           <select
-            style={css.modelSelect}
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-          >
-            <option value="gpt-4o">GPT-4o</option>
-            <option value="gpt-4o-mini">GPT-4o mini</option>
-            <option value="gpt-3.5-turbo">GPT-3.5</option>
-          </select>
+  style={css.modelSelect}
+  value={model}
+  onChange={(e) => setModel(e.target.value)}
+>
+  <option value="llama-3.1-8b-instant">Llama 3.1 8B (Fast)</option>
+  <option value="llama-3.3-70b-versatile">Llama 3.3 70B (Smart)</option>
+  <option value="llama3-8b-8192">Llama 3 8B</option>
+</select>
 
           <div style={{ display: 'flex', gap: '8px' }}>
             <button

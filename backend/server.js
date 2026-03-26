@@ -6,9 +6,11 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const axios = require('axios');
 const { encrypt, decrypt } = require('./vault/vault');
+const cors = require('cors');
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 
 // ── MongoDB Schemas ──────────────────────────────────────────────────────────
 
@@ -37,22 +39,53 @@ const AuditLog = mongoose.model('AuditLog', auditSchema);
 
 // ── NER helper ───────────────────────────────────────────────────────────────
 
-function callNER(text, sessionId) {
+function callNER(text, sessionId, retries = 1) {
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32';
     const py = spawn(isWindows ? 'python' : 'python3', ['ner/redactor.py']);
     let output = '';
     let errOutput = '';
+    let settled = false;
+
+    // Timeout — kill the process if it takes more than 15 seconds
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      py.kill();
+      if (retries > 0) {
+        console.warn('NER timeout — retrying once...');
+        callNER(text, sessionId, retries - 1).then(resolve).catch(reject);
+      } else {
+        reject(new Error('NER process timed out'));
+      }
+    }, 15000);
 
     py.stdin.write(JSON.stringify({ text, sessionId }));
     py.stdin.end();
 
     py.stdout.on('data', d => output += d);
     py.stderr.on('data', d => errOutput += d);
+
     py.on('close', code => {
-      if (code !== 0) return reject(new Error(`NER exited ${code}: ${errOutput}`));
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        if (retries > 0) {
+          console.warn(`NER exited ${code} — retrying once...`);
+          return callNER(text, sessionId, retries - 1).then(resolve).catch(reject);
+        }
+        return reject(new Error(`NER exited ${code}: ${errOutput}`));
+      }
       try { resolve(JSON.parse(output)); }
       catch (e) { reject(new Error(`NER JSON parse failed: ${output}`)); }
+    });
+
+    py.on('error', err => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`NER spawn failed: ${err.message}`));
     });
   });
 }
@@ -85,6 +118,17 @@ async function writeVaultEntries(sessionId, entities) {
   }
 }
 
+
+// ── Sanitize function ───────────────────────────────────────────────────────────────────
+function sanitize(input) {
+  if (typeof input !== 'string') return '';
+  return input
+    .slice(0, 4000)                          // max prompt length
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') // strip control characters
+    .replace(/\[([A-Z]+)_(\d+)\]/g, '')      // strip pre-existing tokens (prompt injection)
+    .trim();
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 // POST /api/session
@@ -97,9 +141,12 @@ app.post('/api/session', (req, res) => {
 
 // POST /api/preview
 app.post('/api/preview', async (req, res) => {
-  const { sessionId, prompt } = req.body;
-  if (!sessionId || !prompt)
+  const { sessionId, prompt: rawPrompt } = req.body;
+  if (!sessionId || !rawPrompt)
     return res.status(400).json({ error: 'sessionId and prompt required' });
+  const prompt = sanitize(rawPrompt);
+  if (!prompt)
+    return res.status(400).json({ error: 'prompt is empty after sanitization' });
 
   try {
     const nerResult = await callNER(prompt, sessionId);
@@ -118,9 +165,13 @@ app.post('/api/preview', async (req, res) => {
 
 // POST /api/prompt
 app.post('/api/prompt', async (req, res) => {
-  const { sessionId, prompt, aiModel = 'gemini-1.5-flash' } = req.body;
-  if (!sessionId || !prompt)
-    return res.status(400).json({ error: 'sessionId and prompt required' });
+
+  const { sessionId, prompt: rawPrompt, aiModel = 'gemini-1.5-flash' } = req.body;
+if (!sessionId || !rawPrompt)
+  return res.status(400).json({ error: 'sessionId and prompt required' });
+const prompt = sanitize(rawPrompt);
+if (!prompt)
+  return res.status(400).json({ error: 'prompt is empty after sanitization' });
 
   try {
     // 1. Redact
@@ -142,10 +193,12 @@ app.post('/api/prompt', async (req, res) => {
     });
 
     // 4. Call GROQ
+    const GROQ_MODELS = ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'llama3-8b-8192'];
+    const resolvedModel = GROQ_MODELS.includes(aiModel) ? aiModel : process.env.GROQ_MODEL;
     const groqRes = await axios.post(
       process.env.GROQ_API_URL,
       {
-        model: process.env.GROQ_MODEL,
+        model: resolvedModel,
         messages: [
           {
             role: "system",
