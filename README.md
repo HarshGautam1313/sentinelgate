@@ -148,11 +148,6 @@ With SentinelGate:
 |---|---|
 | Yatharth Vats | Team Lead |
 | Harsh Gautam | Backend + ML pipeline |
-| Raman | Frontend |
 | Kartik Gautam | Frontend |
 
 ---
-
-## License
-
-MIT
